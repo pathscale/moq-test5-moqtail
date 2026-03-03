@@ -22,6 +22,7 @@ import {
   getOrCreateStreamName,
   joinUrl,
   normalizePath,
+  RELAY_OPTIONS,
 } from "./helpers";
 import type { DiagEvent, RemoteParticipant } from "./types";
 import { VideoCanvas } from "./VideoCanvas";
@@ -643,9 +644,13 @@ export const TestCall: Component = () => {
                 }
                 class="w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
               >
-                <option value="http://localhost:4443">http://localhost:4443</option>
-                <option value="https://hk.nofilter.io">https://hk.nofilter.io</option>
-                <option value="https://usc.cdn.moq.dev">https://usc.cdn.moq.dev</option>
+                <For each={RELAY_OPTIONS}>
+                  {(relay) => (
+                    <option value={relay.url}>
+                      {relay.name}
+                    </option>
+                  )}
+                </For>
               </select>
             </div>
 

@@ -1,5 +1,26 @@
 const T0 = performance.now();
-const DEFAULT_RELAY = "https://hk.nofilter.io";
+
+export type RelayOption = {
+  name: string;
+  url: string;
+};
+
+export const RELAY_OPTIONS: RelayOption[] = [
+  {
+    name: "moq-dev",
+    url: "https://moqrelay2.sylvan-b.com/",
+  },
+  {
+    name: "moxygen",
+    url: "https://moxyrelay.sylvan-b.com/",
+  },
+  {
+    name: "moqtail",
+    url: "https://moqtail1.sylvan-b.com/",
+  },
+];
+
+const DEFAULT_RELAY = RELAY_OPTIONS[0].url;
 
 export function diagTime(): number {
   return Math.round(performance.now() - T0);
@@ -31,7 +52,9 @@ export function getOrCreateStreamName(): string {
 export function getOrCreateRelayUrl(): string {
   const key = "moq-relay-url";
   const stored = localStorage.getItem(key);
-  if (stored) return stored;
+  if (stored && RELAY_OPTIONS.some((option) => option.url === stored)) {
+    return stored;
+  }
   localStorage.setItem(key, DEFAULT_RELAY);
   return DEFAULT_RELAY;
 }
