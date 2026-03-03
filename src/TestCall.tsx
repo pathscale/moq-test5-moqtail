@@ -88,7 +88,8 @@ export const TestCall: Component = () => {
 
   const handleRelayUrlChange = (value: string) => {
     setRelayUrl(value);
-    localStorage.setItem("moq-test-relay-url", value);
+    localStorage.setItem("moq-relay-url", value);
+    window.location.reload();
   };
 
   const connection = new Moq.Connection.Reload({ enabled: false });
@@ -342,7 +343,7 @@ export const TestCall: Component = () => {
       connection: connection.established,
       enabled: true,
       name: path,
-      reload: false,
+      reload: true,
     });
 
     const sync = new Watch.Sync();
@@ -361,6 +362,23 @@ export const TestCall: Component = () => {
     signals.effect((eff) => {
       const audioCatalog = eff.get(audioSource.catalog);
       if (audioCatalog) log("sub", `...${shortPath} audio catalog received`);
+    });
+    signals.effect((eff) => {
+      const videoCatalog = eff.get(videoSource.catalog);
+      log("video", `...${shortPath} video catalog: ${videoCatalog ? "received" : "none"}`);
+    });
+    signals.effect((eff) => {
+      const stalled = eff.get(videoDecoder.stalled);
+      log("video", `...${shortPath} video decoder stalled: ${stalled}`);
+    });
+    let videoFrameCount = 0;
+    signals.effect((eff) => {
+      const frame = eff.get(videoDecoder.frame);
+      if (!frame) return;
+      videoFrameCount++;
+      if (videoFrameCount === 1 || videoFrameCount % 100 === 0) {
+        log("video", `...${shortPath} video frame #${videoFrameCount} (${frame.displayWidth}x${frame.displayHeight})`);
+      }
     });
     signals.effect((eff) => {
       const root = eff.get(audioDecoder.root);
@@ -612,15 +630,17 @@ export const TestCall: Component = () => {
               <label class="block text-sm font-medium text-gray-300">
                 Relay URL
               </label>
-              <input
-                type="text"
+              <select
                 value={relayUrl()}
-                onInput={(event) =>
+                onChange={(event) =>
                   handleRelayUrlChange(event.currentTarget.value)
                 }
                 class="w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-                placeholder="https://relay.example.com"
-              />
+              >
+                <option value="http://localhost:4443">http://localhost:4443</option>
+                <option value="http://hk.nofilter.io">http://hk.nofilter.io</option>
+                <option value="https://usc.cdn.moq.dev">https://usc.cdn.moq.dev</option>
+              </select>
             </div>
 
             <div class="space-y-2">

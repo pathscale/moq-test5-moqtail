@@ -1,5 +1,5 @@
 const T0 = performance.now();
-const DEFAULT_RELAY = "https://us-east-1.devrelay.sylvan-b.com/";
+const DEFAULT_RELAY = "http://hk.nofilter.io";
 
 export function diagTime(): number {
   return Math.round(performance.now() - T0);
@@ -29,7 +29,7 @@ export function getOrCreateStreamName(): string {
 }
 
 export function getOrCreateRelayUrl(): string {
-  const key = "moq-test-relay-url";
+  const key = "moq-relay-url";
   const stored = localStorage.getItem(key);
   if (stored) return stored;
   localStorage.setItem(key, DEFAULT_RELAY);
