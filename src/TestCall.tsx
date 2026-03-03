@@ -92,7 +92,13 @@ export const TestCall: Component = () => {
     window.location.reload();
   };
 
-  const connection = new Moq.Connection.Reload({ enabled: false });
+
+  const connection = new Moq.Connection.Reload({
+    enabled: false,
+    websocket: {
+      enabled: false,
+    },
+  });
   const connectionStatus = createAccessor(connection.status);
   const broadcastId = crypto.randomUUID().slice(0, 8);
 
