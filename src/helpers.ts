@@ -18,6 +18,10 @@ export const RELAY_OPTIONS: RelayOption[] = [
     name: "moqtail",
     url: "https://moqtail1.sylvan-b.com/",
   },
+  {
+    name: "localhost",
+    url: "http://localhost:4443",
+  },
 ];
 
 const DEFAULT_RELAY = RELAY_OPTIONS[0].url;
