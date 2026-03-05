@@ -1,24 +1,19 @@
-import solid from "@moq/signals/solid";
 import { For, Show, createEffect, onCleanup } from "solid-js";
 
 import { joinUrl, normalizePath } from "../helpers";
 import { useTestSession } from "../hooks/useTestSession";
 import { VideoCanvas } from "../VideoCanvas";
-import {
-  SectionCard,
-  TestShell,
-} from "../components/TestShell";
-import { createJsApiPublisher } from "../scenarios/js-api/JsApiPublisher";
-import { createJsApiSubscriber } from "../scenarios/js-api/JsApiSubscriber";
+import { SectionCard, TestShell } from "../components/TestShell";
+import { createMoqtailPublisher } from "../scenarios/MoqtailPublisher";
+import { createMoqtailSubscriber } from "../scenarios/MoqtailSubscriber";
 
-export function JsApiPage() {
+export function Test5() {
   const session = useTestSession();
-  const publisher = createJsApiPublisher(session.log);
-  const subscriber = createJsApiSubscriber({
-    connection: publisher.connection,
+  const publisher = createMoqtailPublisher(session.log);
+  const subscriber = createMoqtailSubscriber({
+    getClient: publisher.getClient,
     log: session.log,
   });
-  session.useExternalConnection(publisher.connection);
 
   const subscriptionTargets = () => {
     const override = normalizePath(session.watchPathOverride());
@@ -28,7 +23,8 @@ export function JsApiPage() {
 
   createEffect(() => {
     if (!session.joined()) {
-      publisher.stop();
+      // Stop publisher when leaving
+      void publisher.stop();
       return;
     }
 
@@ -36,21 +32,27 @@ export function JsApiPage() {
       session.joinedRelayUrl(),
       session.joinedRelayPath(),
     );
-    publisher.start(relayUrl, session.localPublishPath());
+    void publisher.start(relayUrl, session.localPublishPath());
   });
 
   createEffect(() => {
     if (!session.joined()) {
+      subscriber.stopNamespaceWatch();
       subscriber.clear();
       return;
     }
 
-    subscriber.reconcile(subscriptionTargets());
+    // Start watching for namespace announcements from other participants
+    const prefixParts = session.joinedRelayPath().split("/").filter(Boolean);
+    void subscriber.startNamespaceWatch(prefixParts, session.localPublishPath());
+
+    // Also reconcile any explicit targets
+    void subscriber.reconcile(subscriptionTargets());
   });
 
   onCleanup(() => {
     subscriber.close();
-    publisher.close();
+    void publisher.close();
   });
 
   return (
@@ -83,7 +85,7 @@ export function JsApiPage() {
                     ? "bg-green-600 hover:bg-green-700"
                     : "bg-gray-700 hover:bg-gray-600"
                 }`}
-                onClick={publisher.toggleAudio}
+                onClick={() => void publisher.toggleAudio()}
               >
                 Mic
               </button>
@@ -93,7 +95,7 @@ export function JsApiPage() {
                     ? "bg-green-600 hover:bg-green-700"
                     : "bg-gray-700 hover:bg-gray-600"
                 }`}
-                onClick={publisher.toggleVideo}
+                onClick={() => void publisher.toggleVideo()}
               >
                 Cam
               </button>
@@ -119,10 +121,7 @@ export function JsApiPage() {
               <div class="rounded border border-gray-800 bg-gray-950/70 p-3">
                 <div class="text-gray-500">Local publish path</div>
                 <div class="break-all pt-1 text-gray-200">
-                  {String(
-                    publisher.localBroadcast.name.peek() ||
-                      session.localPublishPath(),
-                  )}
+                  {session.localPublishPath()}
                 </div>
               </div>
             </div>
@@ -150,10 +149,9 @@ export function JsApiPage() {
 
                 <For each={subscriber.participants()}>
                   {(participant) => {
-                    const remoteFrame = solid(participant.videoDecoder.frame);
                     return (
                       <div class="relative aspect-video overflow-hidden rounded-md bg-gray-800">
-                        <VideoCanvas frame={remoteFrame} />
+                        <VideoCanvas frame={participant.videoFrame} />
                         <div class="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-xs">
                           {participant.id.split("/").slice(-1)[0] ||
                             "Participant"}
@@ -170,7 +168,6 @@ export function JsApiPage() {
                 </div>
               </Show>
             </div>
-
           </div>
         </Show>
       </SectionCard>

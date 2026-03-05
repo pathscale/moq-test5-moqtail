@@ -1,7 +1,5 @@
 import { useParams } from "@solidjs/router";
-import * as Moq from "@moq/lite";
-import { createAccessor } from "@moq/signals/solid";
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 
 import {
   diagTime,
@@ -10,7 +8,6 @@ import {
   normalizePath,
 } from "../helpers";
 import type { DiagEvent } from "../types";
-import { applyTransportPolicy } from "../utils/transportPolicy";
 
 export function useTestSession() {
   const [diagLog, setDiagLog] = createSignal<DiagEvent[]>([]);
@@ -37,25 +34,6 @@ export function useTestSession() {
   const [joined, setJoined] = createSignal(false);
   const [participants, setParticipants] = createSignal<string[]>([]);
 
-  const connection = applyTransportPolicy(
-    new Moq.Connection.Reload({
-      enabled: false,
-    }),
-  );
-  const connectionStatus = createAccessor(connection.status);
-  const establishedConnection = createAccessor(connection.established);
-  const [overrideEstablished, setOverrideEstablished] = createSignal<
-    (() => ReturnType<typeof connection.established.get>) | undefined
-  >(undefined);
-
-  const activeEstablished = () => {
-    const override = overrideEstablished();
-    return override ? override() : establishedConnection();
-  };
-
-  const useExternalConnection = (conn: Moq.Connection.Reload) => {
-    setOverrideEstablished(() => createAccessor(conn.established));
-  };
   const broadcastId = crypto.randomUUID().slice(0, 8);
 
   const joinedRoomName = () => joinConfig()?.roomName ?? roomName();
@@ -137,75 +115,20 @@ export function useTestSession() {
 
     setParticipants([]);
     setJoinConfig({ relayUrl: currentRelayUrl, roomName: currentRoomName });
-    connection.url.set(url);
-    connection.enabled.set(true);
 
     log("conn", `join room prefix: ${relayPath}`);
     log("conn", `join publish name: ${publishName}`);
-    log("conn", "connection enabled");
 
     setJoined(true);
     setJoining(false);
   };
 
   const handleLeave = () => {
-    connection.url.set(undefined);
-    connection.enabled.set(false);
     setParticipants([]);
     setJoinConfig(undefined);
     setJoined(false);
     log("conn", "disconnected");
   };
-
-  createEffect(() => {
-    const conn = activeEstablished();
-    if (!conn || !joinConfig()) return;
-
-    const prefixText = joinedRelayPath();
-    const localPath = localPublishPath();
-    const prefix = Moq.Path.from(prefixText);
-    const announced = conn.announced(prefix);
-    let closed = false;
-
-    log("announced", `listening on prefix: ${prefixText}`);
-
-    onCleanup(() => {
-      closed = true;
-      announced.close();
-    });
-
-    void (async () => {
-      try {
-        for (; ;) {
-          const update = await announced.next();
-          if (!update) {
-            log("announced", "loop ended");
-            break;
-          }
-
-          const path = String(update.path);
-          log("announced", `event active=${update.active} path=${path}`);
-
-          if (path === localPath) {
-            log("announced", `ignoring local broadcast: ${path}`);
-            continue;
-          }
-
-          if (update.active) {
-            addParticipant(path);
-            log("announced", `remote active: ${path}`);
-          } else {
-            removeParticipant(path);
-            log("announced", `remote inactive: ${path}`);
-          }
-        }
-      } catch (error) {
-        if (!closed) {
-          log("announced", `ERROR: ${error}`);
-        }
-      }
-    })();
-  });
 
   const handleBeforeUnload = () => {
     log("conn", "beforeunload -> leave");
@@ -217,11 +140,9 @@ export function useTestSession() {
   onCleanup(() => {
     window.removeEventListener("beforeunload", handleBeforeUnload);
     handleLeave();
-    connection.close();
   });
 
   return {
-    connectionStatus,
     diagLog,
     handleJoin,
     handleLeave,
@@ -240,7 +161,6 @@ export function useTestSession() {
     resolvedWatchName,
     roomName,
     setWatchPathOverride,
-    useExternalConnection,
     watchPathOverride,
   };
 }

@@ -81,7 +81,7 @@ export function DebugPanel(props: DebugPanelProps) {
             class={
               props.pubRms() === undefined
                 ? "text-gray-400"
-                : props.pubRms() > 0.01
+                : (props.pubRms() ?? 0) > 0.01
                   ? "text-green-400"
                   : "text-red-400"
             }
@@ -94,7 +94,7 @@ export function DebugPanel(props: DebugPanelProps) {
             class={`h-full transition-all duration-100 ${
               props.pubRms() === undefined
                 ? "bg-gray-800"
-                : props.pubRms() > 0.01
+                : (props.pubRms() ?? 0) > 0.01
                   ? "bg-blue-500"
                   : "bg-red-900/30"
             }`}
@@ -110,7 +110,7 @@ export function DebugPanel(props: DebugPanelProps) {
             class={
               props.subRms() === undefined
                 ? "text-gray-400"
-                : props.subRms() > 0.01
+                : (props.subRms() ?? 0) > 0.01
                   ? "text-green-400"
                   : "text-red-400"
             }
@@ -123,7 +123,7 @@ export function DebugPanel(props: DebugPanelProps) {
             class={`h-full transition-all duration-100 ${
               props.subRms() === undefined
                 ? "bg-gray-800"
-                : props.subRms() > 0.01
+                : (props.subRms() ?? 0) > 0.01
                   ? "bg-green-500"
                   : "bg-red-900/30"
             }`}
