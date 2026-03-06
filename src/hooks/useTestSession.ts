@@ -79,8 +79,11 @@ export function useTestSession() {
 
   const handleRelayUrlChange = (value: string) => {
     setRelayUrl(value);
-    localStorage.setItem("moq-relay-url", value);
-    window.location.reload();
+    try {
+      localStorage.setItem("moq-relay-url", new URL(value).toString());
+    } catch {
+      // Ignore partial/invalid input while the user is still typing.
+    }
   };
 
   const handleJoin = () => {
@@ -113,8 +116,11 @@ export function useTestSession() {
     const relayPath = getRoomPrefix(currentRoomName);
     const publishName = getPublishName(relayPath);
 
+    const normalizedRelayUrl = url.toString();
+    setRelayUrl(normalizedRelayUrl);
+    localStorage.setItem("moq-relay-url", normalizedRelayUrl);
     setParticipants([]);
-    setJoinConfig({ relayUrl: currentRelayUrl, roomName: currentRoomName });
+    setJoinConfig({ relayUrl: normalizedRelayUrl, roomName: currentRoomName });
 
     log("conn", `join room prefix: ${relayPath}`);
     log("conn", `join publish name: ${publishName}`);

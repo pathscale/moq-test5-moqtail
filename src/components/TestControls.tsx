@@ -1,6 +1,4 @@
-import { For, Show } from "solid-js";
-
-import { RELAY_OPTIONS } from "../helpers";
+import { Show } from "solid-js";
 import { useTestSession } from "../hooks/useTestSession";
 
 type Session = ReturnType<typeof useTestSession>;
@@ -26,17 +24,15 @@ export function TestControls(props: {
           <label class="block text-sm font-medium text-gray-300">
             Relay URL
           </label>
-          <select
+          <input
+            type="url"
             value={props.session.relayUrl()}
-            onChange={(event) =>
+            onInput={(event) =>
               props.session.handleRelayUrlChange(event.currentTarget.value)
             }
             class="w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-          >
-            <For each={RELAY_OPTIONS}>
-              {(relay) => <option value={relay.url}>{relay.url}</option>}
-            </For>
-          </select>
+            placeholder="https://moq-relay.nofilter.io"
+          />
         </div>
 
         <div class="space-y-2">

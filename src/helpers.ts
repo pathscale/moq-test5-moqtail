@@ -1,22 +1,8 @@
 const T0 = performance.now();
 
-export type RelayOption = {
-  name: string;
-  url: string;
-};
-
-export const RELAY_OPTIONS: RelayOption[] = [
-  {
-    name: "localhost",
-    url: "http://localhost:4443",
-  },
-  {
-    name: "moq relay nofilter",
-    url: "https://moq-relay.nofilter.io/",
-  },
-];
-
-const DEFAULT_RELAY = RELAY_OPTIONS[0].url;
+const RELAY_STORAGE_KEY = "moq-relay-url";
+const RELAY_QUERY_PARAM = "relay";
+const DEFAULT_RELAY = "http://localhost:4443";
 
 export function diagTime(): number {
   return Math.round(performance.now() - T0);
@@ -46,12 +32,31 @@ export function getOrCreateStreamName(): string {
 }
 
 export function getOrCreateRelayUrl(): string {
-  const key = "moq-relay-url";
-  const stored = localStorage.getItem(key);
-  if (stored && RELAY_OPTIONS.some((option) => option.url === stored)) {
-    return stored;
+  const queryRelay = new URLSearchParams(window.location.search).get(
+    RELAY_QUERY_PARAM,
+  );
+  if (queryRelay) {
+    try {
+      const parsed = new URL(queryRelay).toString();
+      localStorage.setItem(RELAY_STORAGE_KEY, parsed);
+      return parsed;
+    } catch {
+      // Ignore invalid relay query values and fall back to storage/default.
+    }
   }
-  localStorage.setItem(key, DEFAULT_RELAY);
+
+  const stored = localStorage.getItem(RELAY_STORAGE_KEY);
+  if (stored) {
+    try {
+      const parsed = new URL(stored).toString();
+      localStorage.setItem(RELAY_STORAGE_KEY, parsed);
+      return parsed;
+    } catch {
+      // Ignore invalid stored values and fall back to default.
+    }
+  }
+
+  localStorage.setItem(RELAY_STORAGE_KEY, DEFAULT_RELAY);
   return DEFAULT_RELAY;
 }
 

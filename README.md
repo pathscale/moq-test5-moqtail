@@ -39,7 +39,7 @@ just relay
 just pub tos
 ```
 
-Then select `http://localhost:4443` from the relay dropdown in the app. The `@moq/lite` library automatically fetches the self-signed certificate fingerprint from `http://localhost:4443/certificate.sha256` and upgrades to HTTPS for WebTransport.
+Then set relay URL to `http://localhost:4443` in the app. The `@moq/lite` library automatically fetches the self-signed certificate fingerprint from `http://localhost:4443/certificate.sha256` and upgrades to HTTPS for WebTransport.
 
 If you have [Nix](https://nixos.org/download.html) with flakes enabled, you can skip manual installs:
 
@@ -50,7 +50,7 @@ nix develop -c just relay
 
 ## CDN
 
-The relay dropdown includes several public CDN nodes (`usc.cdn.moq.dev`, `hk.nofilter.io`, etc.) — no local setup needed for those.
+Set relay URL to any public CDN node (for example `https://moq-relay.nofilter.io/`) — no local setup needed.
 
 ## Stack
 
