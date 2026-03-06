@@ -7,6 +7,10 @@ import {
   type MOQtailClient,
 } from "moqtail";
 
+import {
+  PlayoutBuffer,
+  type PlayoutBufferDropReason,
+} from "./PlayoutBuffer";
 import type { DecodedFrame, FrameObject, StartSubscriptionParams, TrackKey } from "./types";
 
 type SubscriptionState = "idle" | "starting" | "running" | "stopping" | "disposed";
@@ -24,8 +28,12 @@ export class TrackSubscription {
   private requestId?: bigint;
   private reader?: ReadableStreamDefaultReader<any>;
   private decoder?: VideoDecoder;
+  private playoutBuffer?: PlayoutBuffer;
   private canceled = false;
   private frameCount = 0;
+  private playoutDropCount = 0;
+  private playoutLateDropCount = 0;
+  private queueDepthHighWater = 0;
 
   constructor(params: StartSubscriptionParams) {
     this.key = params.key;
@@ -86,6 +94,9 @@ export class TrackSubscription {
     this.requestId = result.requestId;
     this.reader = result.stream.getReader();
     this.frameCount = 0;
+    this.playoutDropCount = 0;
+    this.playoutLateDropCount = 0;
+    this.queueDepthHighWater = 0;
 
     this.decoder = new VideoDecoder({
       output: (frame) => {
@@ -113,6 +124,14 @@ export class TrackSubscription {
       hardwareAcceleration: "prefer-software",
     });
 
+    this.playoutBuffer = new PlayoutBuffer(undefined, {
+      onRelease: (frameObject) => this.decodeFrameObject(frameObject),
+      onDrop: (_frameObject, reason, queueDepth) => {
+        this.onPlayoutDrop(reason, queueDepth);
+      },
+    });
+    this.playoutBuffer.start();
+
     void this.consumeStream();
   }
 
@@ -127,24 +146,43 @@ export class TrackSubscription {
         if (obj.objectStatus !== ObjectStatus.Normal) continue;
 
         const frameObject = this.toFrameObject(obj);
-        const chunk = new EncodedVideoChunk({
-          type: frameObject.isKey ? "key" : "delta",
-          timestamp: frameObject.timestampUs,
-          data: frameObject.payload,
-        });
+        this.playoutBuffer?.enqueue(frameObject);
 
-        try {
-          this.decoder?.decode(chunk);
-        } catch (error) {
-          const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
-          this.log?.("video", `...${shortId} decode error: ${error}`);
+        const depth = this.playoutBuffer?.getDepth() ?? 0;
+        if (depth > this.queueDepthHighWater) {
+          this.queueDepthHighWater = depth;
+          if (depth === 1 || depth % 20 === 0) {
+            const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+            this.log?.("video", `...${shortId} playout depth: ${depth}`);
+          }
         }
       }
     } finally {
+      this.cleanupPlayoutBuffer();
       this.reader?.releaseLock();
       this.reader = undefined;
       this.decoder?.close();
       this.decoder = undefined;
+    }
+  }
+
+  private decodeFrameObject(frameObject: FrameObject): void {
+    if (this.canceled || this.state === "stopping" || this.state === "disposed") {
+      return;
+    }
+    if (!this.decoder) return;
+
+    const chunk = new EncodedVideoChunk({
+      type: frameObject.isKey ? "key" : "delta",
+      timestamp: frameObject.timestampUs,
+      data: frameObject.payload,
+    });
+
+    try {
+      this.decoder.decode(chunk);
+    } catch (error) {
+      const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+      this.log?.("video", `...${shortId} decode error: ${error}`);
     }
   }
 
@@ -164,6 +202,7 @@ export class TrackSubscription {
 
   private async stopInternal(): Promise<void> {
     this.canceled = true;
+    this.cleanupPlayoutBuffer();
 
     try {
       await this.reader?.cancel();
@@ -190,5 +229,33 @@ export class TrackSubscription {
     }
 
     this.sink.clear(this.key);
+  }
+
+  private cleanupPlayoutBuffer(): void {
+    this.playoutBuffer?.stop();
+    this.playoutBuffer?.drain();
+    this.playoutBuffer = undefined;
+  }
+
+  private onPlayoutDrop(reason: PlayoutBufferDropReason, queueDepth: number): void {
+    const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+    if (reason === "overflow") {
+      this.playoutDropCount++;
+      if (this.playoutDropCount === 1 || this.playoutDropCount % 20 === 0) {
+        this.log?.(
+          "video",
+          `...${shortId} playout overflow drops: ${this.playoutDropCount} (depth=${queueDepth})`,
+        );
+      }
+      return;
+    }
+
+    this.playoutLateDropCount++;
+    if (this.playoutLateDropCount === 1 || this.playoutLateDropCount % 20 === 0) {
+      this.log?.(
+        "video",
+        `...${shortId} playout late drops: ${this.playoutLateDropCount} (depth=${queueDepth})`,
+      );
+    }
   }
 }
