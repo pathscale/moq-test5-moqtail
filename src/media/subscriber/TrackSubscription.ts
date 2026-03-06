@@ -11,6 +11,7 @@ import {
   PlayoutBuffer,
   type PlayoutBufferDropReason,
 } from "./PlayoutBuffer";
+import { StallDetector, type StallEvent } from "./StallDetector";
 import type {
   DecodedFrame,
   FrameObject,
@@ -21,6 +22,11 @@ import type {
 } from "./types";
 
 type SubscriptionState = "idle" | "starting" | "running" | "stopping" | "disposed";
+
+const MIN_RECOVERY_INTERVAL_MS = 3000;
+const MAX_RECOVERIES_PER_WINDOW = 3;
+const RECOVERY_WINDOW_MS = 30_000;
+const DECODE_RECOVERY_GRACE_MS = 350;
 
 export class TrackSubscription {
   readonly key: TrackKey;
@@ -39,11 +45,18 @@ export class TrackSubscription {
   private generation = 0;
   private decoder?: VideoDecoder;
   private playoutBuffer?: PlayoutBuffer;
+  private stallDetector?: StallDetector;
   private canceled = false;
   private frameCount = 0;
+  private lastObjectReceivedAtMs = 0;
+  private lastFrameDecodedAtMs = 0;
   private playoutDropCount = 0;
   private playoutLateDropCount = 0;
   private queueDepthHighWater = 0;
+  private recoveryInFlight = false;
+  private lastRecoveryAtMs = 0;
+  private recoveryWindowStartAtMs = 0;
+  private recoveriesInWindow = 0;
 
   constructor(params: StartSubscriptionParams) {
     this.key = params.key;
@@ -107,7 +120,11 @@ export class TrackSubscription {
     this.playoutDropCount = 0;
     this.playoutLateDropCount = 0;
     this.queueDepthHighWater = 0;
+    this.recoveryInFlight = false;
     this.generation += 1;
+    const now = performance.now();
+    this.lastObjectReceivedAtMs = now;
+    this.lastFrameDecodedAtMs = now;
 
     const workerStarted = await this.startWorkerDecoder(this.generation);
     if (!workerStarted) {
@@ -132,6 +149,7 @@ export class TrackSubscription {
       },
     });
     this.playoutBuffer.start();
+    this.setupStallDetector();
 
     void this.consumeStream();
   }
@@ -147,6 +165,8 @@ export class TrackSubscription {
         if (obj.objectStatus !== ObjectStatus.Normal) continue;
 
         const frameObject = this.toFrameObject(obj);
+        this.lastObjectReceivedAtMs = frameObject.receivedAtMs;
+        this.stallDetector?.onObjectReceived(frameObject.receivedAtMs);
         this.playoutBuffer?.enqueue(frameObject);
 
         const depth = this.playoutBuffer?.getDepth() ?? 0;
@@ -159,6 +179,7 @@ export class TrackSubscription {
         }
       }
     } finally {
+      this.cleanupStallDetector();
       this.cleanupPlayoutBuffer();
       this.reader?.releaseLock();
       this.reader = undefined;
@@ -352,11 +373,14 @@ export class TrackSubscription {
       frame.close();
       return;
     }
+    const decodedAtMs = performance.now();
+    this.lastFrameDecodedAtMs = decodedAtMs;
+    this.stallDetector?.onFrameDecoded(decodedAtMs);
 
     const decodedFrame: DecodedFrame = {
       key: this.key,
       frame,
-      decodedAtMs: performance.now(),
+      decodedAtMs,
       sourceTimestampUs,
     };
     this.sink.render(decodedFrame);
@@ -365,6 +389,125 @@ export class TrackSubscription {
       const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
       this.log?.("video", `...${shortId} frame #${this.frameCount} (${frame.displayWidth}x${frame.displayHeight})`);
     }
+  }
+
+  private setupStallDetector(): void {
+    this.cleanupStallDetector();
+    this.stallDetector = new StallDetector(
+      {
+        objectStallMs: 1500,
+        decodeStallMs: 800,
+      },
+      {
+        getGeneration: () => this.generation,
+        getPlayoutBufferDepth: () => this.playoutBuffer?.getDepth() ?? 0,
+        onStall: (event) => {
+          void this.handleStall(event);
+        },
+        log: this.log,
+      },
+    );
+    this.stallDetector.start();
+  }
+
+  private cleanupStallDetector(): void {
+    this.stallDetector?.stop();
+    this.stallDetector = undefined;
+  }
+
+  private async handleStall(event: StallEvent): Promise<void> {
+    if (event.generation !== this.generation) return;
+    if (this.state !== "running") return;
+    if (this.canceled || this.state === "stopping" || this.state === "disposed") return;
+    if (this.recoveryInFlight) return;
+
+    const now = performance.now();
+    if (now - this.lastRecoveryAtMs < MIN_RECOVERY_INTERVAL_MS) {
+      return;
+    }
+    if (now - this.recoveryWindowStartAtMs > RECOVERY_WINDOW_MS) {
+      this.recoveryWindowStartAtMs = now;
+      this.recoveriesInWindow = 0;
+    } else if (this.recoveriesInWindow >= MAX_RECOVERIES_PER_WINDOW) {
+      return;
+    }
+
+    this.recoveryInFlight = true;
+    this.lastRecoveryAtMs = now;
+    this.recoveriesInWindow += 1;
+
+    const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+    this.log?.(
+      "video",
+      `...${shortId} recovering from ${event.type} (depth=${event.playoutBufferDepth})`,
+    );
+
+    try {
+      if (event.type === "decode_stall") {
+        const frameBefore = this.lastFrameDecodedAtMs;
+        this.resetDecoderBackend(event.generation);
+        await this.requestKeyframeBestEffort(event.type);
+        await this.sleep(DECODE_RECOVERY_GRACE_MS);
+
+        if (event.generation !== this.generation) return;
+        if (this.state !== "running" || this.canceled) return;
+        if (this.lastFrameDecodedAtMs <= frameBefore) {
+          await this.restartSubscriptionForRecovery(event.type, event.generation);
+        }
+        return;
+      }
+
+      await this.requestKeyframeBestEffort(event.type);
+      await this.restartSubscriptionForRecovery(event.type, event.generation);
+    } finally {
+      this.recoveryInFlight = false;
+    }
+  }
+
+  private resetDecoderBackend(expectedGeneration: number): void {
+    if (expectedGeneration !== this.generation) return;
+    if (this.decodeMode === "worker" && this.decodeWorker) {
+      const message: WorkerInMessage = {
+        type: "RESET",
+        generation: this.generation,
+      };
+      try {
+        this.decodeWorker.postMessage(message);
+      } catch {
+        // Ignore reset post failures; restart flow will handle hard recovery.
+      }
+      return;
+    }
+
+    try {
+      this.decoder?.reset();
+    } catch {
+      // Ignore reset failures; restart flow will handle hard recovery.
+    }
+  }
+
+  private async requestKeyframeBestEffort(stallType: StallEvent["type"]): Promise<void> {
+    const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+    this.log?.("video", `...${shortId} keyframe request (${stallType}) not yet wired; using restart path`);
+  }
+
+  private async restartSubscriptionForRecovery(
+    reason: StallEvent["type"],
+    expectedGeneration: number,
+  ): Promise<void> {
+    if (expectedGeneration !== this.generation) return;
+    const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+    this.log?.("video", `...${shortId} restarting subscription due to ${reason}`);
+
+    await this.stop();
+    if (this.state === "disposed") return;
+    await this.start();
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
   }
 
   private toTransferableBuffer(payload: Uint8Array): ArrayBuffer {
@@ -390,6 +533,7 @@ export class TrackSubscription {
 
   private async stopInternal(): Promise<void> {
     this.canceled = true;
+    this.cleanupStallDetector();
     this.cleanupPlayoutBuffer();
 
     try {
