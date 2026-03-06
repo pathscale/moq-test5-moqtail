@@ -11,6 +11,7 @@ import {
     Tuple,
 } from "moqtail";
 import { createSignal } from "solid-js";
+import { SubscriberEngine } from "../media/subscriber/SubscriberEngine";
 
 type LogFn = (tag: string, msg: string) => void;
 
@@ -44,6 +45,7 @@ export function createMoqtailSubscriber(props: {
 
     let namespaceSub: (() => void) | undefined;
     let currentPrefix: string | undefined;
+    const videoEngine = new SubscriberEngine();
 
     const rmsBuf = new Uint8Array(1024);
     const computeRms = (analyser: AnalyserNode): number => {
@@ -66,90 +68,6 @@ export function createMoqtailSubscriber(props: {
         }
         setSubRms(maxRms);
     }, 100);
-
-    async function subscribeVideo(
-        client: MOQtailClient,
-        namespace: string,
-        participantId: string,
-        onFrame: (frame: VideoFrame) => void,
-    ): Promise<(() => void) | undefined> {
-        const fullTrackName = FullTrackName.tryNew(namespace, "video");
-        let canceled = false;
-        let requestId: bigint | undefined;
-        let videoDecoder: VideoDecoder | undefined;
-
-        const result = await client.subscribe({
-            fullTrackName,
-            filterType: FilterType.LatestObject,
-            forward: true,
-            groupOrder: GroupOrder.Original,
-            priority: 0,
-        });
-
-        if (result instanceof SubscribeError) {
-            props.log("sub", `video subscribe error for ${participantId}: code=${result.errorCode}`);
-            return undefined;
-        }
-
-        requestId = result.requestId;
-        const stream = result.stream;
-        const shortId = participantId.split("/").slice(-1)[0] ?? "participant";
-        let frameCount = 0;
-
-        videoDecoder = new VideoDecoder({
-            output(frame) {
-                onFrame(frame);
-                frameCount++;
-                if (frameCount === 1 || frameCount % 100 === 0) {
-                    props.log("video", `...${shortId} frame #${frameCount} (${frame.displayWidth}x${frame.displayHeight})`);
-                }
-            },
-            error(e) {
-                props.log("video", `...${shortId} decoder error: ${e}`);
-            },
-        });
-
-        videoDecoder.configure({
-            codec: "avc1.42001f",
-            hardwareAcceleration: "prefer-software",
-        });
-
-        (async () => {
-            const reader = stream.getReader();
-            try {
-                for (; ;) {
-                    const { value: obj, done } = await reader.read();
-                    if (done || canceled) break;
-                    if (!obj || !obj.payload) continue;
-                    if (obj.objectStatus !== ObjectStatus.Normal) continue;
-
-                    const isKey = obj.location.object === 0n;
-                    const chunk = new EncodedVideoChunk({
-                        type: isKey ? "key" : "delta",
-                        timestamp: Number(obj.location.group) * 1_000_000 + Number(obj.location.object) * 33_333,
-                        data: obj.payload,
-                    });
-
-                    try {
-                        videoDecoder?.decode(chunk);
-                    } catch (e) {
-                        props.log("video", `...${shortId} decode error: ${e}`);
-                    }
-                }
-            } finally {
-                reader.releaseLock();
-                videoDecoder?.close();
-            }
-        })();
-
-        return () => {
-            canceled = true;
-            if (requestId !== undefined) {
-                client.unsubscribe(requestId).catch(() => { });
-            }
-            videoDecoder?.close();
-        };
-    }
 
     async function subscribeAudio(
         client: MOQtailClient,
@@ -304,12 +222,26 @@ export function createMoqtailSubscriber(props: {
         subscribedParticipants.set(namespace, participant);
         setParticipants((prev) => [...prev, participant]);
 
-        const videoCleanup = await subscribeVideo(client, namespace, namespace, (frame) => {
-            const prev = videoFrame();
-            prev?.close();
-            setVideoFrame(frame);
+        await videoEngine.startSubscription({
+            client,
+            key: { namespace, kind: "video" },
+            sink: {
+                render: (decodedFrame) => {
+                    const prev = videoFrame();
+                    prev?.close();
+                    setVideoFrame(decodedFrame.frame);
+                },
+                clear: () => {
+                    const prev = videoFrame();
+                    prev?.close();
+                    setVideoFrame(undefined);
+                },
+            },
+            log: props.log,
         });
-        if (videoCleanup) cleanups.push(videoCleanup);
+        cleanups.push(() => {
+            void videoEngine.stopSubscription({ namespace, kind: "video" });
+        });
 
         const audioCleanup = await subscribeAudio(client, namespace, namespace, (a) => {
             participantAnalyser = a;
@@ -444,6 +376,7 @@ export function createMoqtailSubscriber(props: {
         window.clearInterval(rmsInterval);
         stopNamespaceWatch();
         clear();
+        void videoEngine.dispose();
     };
 
     return {
