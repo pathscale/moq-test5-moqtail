@@ -2,6 +2,7 @@ import {
   FilterType,
   FullTrackName,
   GroupOrder,
+  Location,
   ObjectStatus,
   SubscribeError,
   type MOQtailClient,
@@ -26,7 +27,9 @@ type SubscriptionState = "idle" | "starting" | "running" | "stopping" | "dispose
 const MIN_RECOVERY_INTERVAL_MS = 3000;
 const MAX_RECOVERIES_PER_WINDOW = 3;
 const RECOVERY_WINDOW_MS = 30_000;
-const DECODE_RECOVERY_GRACE_MS = 350;
+const DECODE_RECOVERY_GRACE_MS = 1000;
+const KEYFRAME_REQUEST_END_GROUP_SPAN = 4n;
+const MIN_KEYFRAME_REQUEST_INTERVAL_MS = 500;
 
 export class TrackSubscription {
   readonly key: TrackKey;
@@ -50,6 +53,14 @@ export class TrackSubscription {
   private frameCount = 0;
   private lastObjectReceivedAtMs = 0;
   private lastFrameDecodedAtMs = 0;
+  private lastObjectGroup?: bigint;
+  private lastObjectObject?: bigint;
+  private keyframeRequests = 0;
+  private keyframeRequestFailures = 0;
+  private keyframeRecoverySuccess = 0;
+  private keyframeRecoveryTimeouts = 0;
+  private lastKeyframeRequestAtMs = 0;
+  private pendingKeyframeRequestAtMs?: number;
   private playoutDropCount = 0;
   private playoutLateDropCount = 0;
   private queueDepthHighWater = 0;
@@ -125,6 +136,9 @@ export class TrackSubscription {
     const now = performance.now();
     this.lastObjectReceivedAtMs = now;
     this.lastFrameDecodedAtMs = now;
+    this.lastObjectGroup = undefined;
+    this.lastObjectObject = undefined;
+    this.pendingKeyframeRequestAtMs = undefined;
 
     const workerStarted = await this.startWorkerDecoder(this.generation);
     if (!workerStarted) {
@@ -166,6 +180,8 @@ export class TrackSubscription {
 
         const frameObject = this.toFrameObject(obj);
         this.lastObjectReceivedAtMs = frameObject.receivedAtMs;
+        this.lastObjectGroup = frameObject.group;
+        this.lastObjectObject = frameObject.object;
         this.stallDetector?.onObjectReceived(frameObject.receivedAtMs);
         this.playoutBuffer?.enqueue(frameObject);
 
@@ -444,20 +460,39 @@ export class TrackSubscription {
 
     try {
       if (event.type === "decode_stall") {
+        const frameCountBefore = this.frameCount;
         const frameBefore = this.lastFrameDecodedAtMs;
         this.resetDecoderBackend(event.generation);
-        await this.requestKeyframeBestEffort(event.type);
+        await this.requestKeyframe(event.generation);
         await this.sleep(DECODE_RECOVERY_GRACE_MS);
 
         if (event.generation !== this.generation) return;
         if (this.state !== "running" || this.canceled) return;
-        if (this.lastFrameDecodedAtMs <= frameBefore) {
-          await this.restartSubscriptionForRecovery(event.type, event.generation);
+
+        const decodedProgressed =
+          this.frameCount > frameCountBefore ||
+          this.lastFrameDecodedAtMs > frameBefore;
+        const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
+        if (decodedProgressed) {
+          this.keyframeRecoverySuccess += 1;
+          this.pendingKeyframeRequestAtMs = undefined;
+          this.log?.(
+            "video",
+            `...${shortId} keyframe recovery success (${this.keyframeRecoverySuccess})`,
+          );
+          return;
         }
+
+        this.keyframeRecoveryTimeouts += 1;
+        this.log?.(
+          "video",
+          `...${shortId} keyframe recovery timeout (${this.keyframeRecoveryTimeouts})`,
+        );
+        await this.restartSubscriptionForRecovery(event.type, event.generation);
         return;
       }
 
-      await this.requestKeyframeBestEffort(event.type);
+      void this.requestKeyframe(event.generation);
       await this.restartSubscriptionForRecovery(event.type, event.generation);
     } finally {
       this.recoveryInFlight = false;
@@ -486,9 +521,49 @@ export class TrackSubscription {
     }
   }
 
-  private async requestKeyframeBestEffort(stallType: StallEvent["type"]): Promise<void> {
+  private async requestKeyframe(
+    expectedGeneration: number,
+  ): Promise<"requested" | "unsupported" | "failed"> {
+    if (expectedGeneration !== this.generation) return "failed";
+    if (this.state !== "running" || this.canceled) return "failed";
+    if (this.requestId === undefined) return "unsupported";
+    if (this.lastObjectGroup === undefined) return "unsupported";
+
+    const now = performance.now();
+    if (now - this.lastKeyframeRequestAtMs < MIN_KEYFRAME_REQUEST_INTERVAL_MS) {
+      return "unsupported";
+    }
+
     const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
-    this.log?.("video", `...${shortId} keyframe request (${stallType}) not yet wired; using restart path`);
+    const startGroup = this.lastObjectGroup + 1n;
+    const endGroup = this.lastObjectGroup + KEYFRAME_REQUEST_END_GROUP_SPAN;
+
+    try {
+      await this.client.subscribeUpdate({
+        subscriptionRequestId: this.requestId,
+        startLocation: new Location(startGroup, 0n),
+        endGroup,
+        forward: true,
+        priority: 0,
+      });
+
+      if (expectedGeneration !== this.generation) return "failed";
+      this.keyframeRequests += 1;
+      this.lastKeyframeRequestAtMs = now;
+      this.pendingKeyframeRequestAtMs = now;
+      this.log?.(
+        "video",
+        `...${shortId} keyframe request issued (#${this.keyframeRequests}, start=${startGroup}, end=${endGroup})`,
+      );
+      return "requested";
+    } catch (error) {
+      this.keyframeRequestFailures += 1;
+      this.log?.(
+        "video",
+        `...${shortId} keyframe request failed (#${this.keyframeRequestFailures}): ${String(error)}`,
+      );
+      return "failed";
+    }
   }
 
   private async restartSubscriptionForRecovery(
@@ -497,7 +572,7 @@ export class TrackSubscription {
   ): Promise<void> {
     if (expectedGeneration !== this.generation) return;
     const shortId = this.key.namespace.split("/").slice(-1)[0] ?? "participant";
-    this.log?.("video", `...${shortId} restarting subscription due to ${reason}`);
+    this.log?.("video", `...${shortId} fallback restart due to ${reason}`);
 
     await this.stop();
     if (this.state === "disposed") return;
