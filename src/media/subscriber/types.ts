@@ -35,3 +35,49 @@ export type StartSubscriptionParams = {
   sink: VideoRenderSink;
   log?: (tag: string, msg: string) => void;
 };
+
+export type WorkerInMessage =
+  | {
+      type: "INIT";
+      generation: number;
+      codec: string;
+      hardwareAcceleration?: "prefer-software" | "prefer-hardware";
+    }
+  | {
+      type: "DECODE";
+      generation: number;
+      timestampUs: number;
+      isKey: boolean;
+      payload: ArrayBuffer;
+    }
+  | {
+      type: "RESET";
+      generation: number;
+    }
+  | {
+      type: "DISPOSE";
+      generation: number;
+    };
+
+export type WorkerOutMessage =
+  | {
+      type: "INIT_OK";
+      generation: number;
+    }
+  | {
+      type: "INIT_ERROR";
+      generation: number;
+      error: string;
+    }
+  | {
+      type: "DECODED";
+      generation: number;
+      timestampUs: number;
+      frame: VideoFrame;
+    }
+  | {
+      type: "ERROR";
+      generation: number;
+      error: string;
+      fatal: boolean;
+    };
