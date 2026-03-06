@@ -31,7 +31,7 @@ export function TestControls(props: {
               props.session.handleRelayUrlChange(event.currentTarget.value)
             }
             class="w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-            placeholder="https://moq-relay.nofilter.io"
+            placeholder="https://interop-relay.cloudflare.mediaoverquic.com/"
           />
         </div>
 

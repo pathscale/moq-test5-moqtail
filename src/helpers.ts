@@ -2,7 +2,7 @@ const T0 = performance.now();
 
 const RELAY_STORAGE_KEY = "moq-relay-url";
 const RELAY_QUERY_PARAM = "relay";
-const DEFAULT_RELAY = "http://localhost:4443";
+const DEFAULT_RELAY = "https://interop-relay.cloudflare.mediaoverquic.com/";
 
 export function diagTime(): number {
   return Math.round(performance.now() - T0);
