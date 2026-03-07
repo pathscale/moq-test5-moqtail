@@ -52,9 +52,13 @@ nix develop -c just relay
 
 Set relay URL to any public CDN node (for example `https://moq-relay.nofilter.io/`) — no local setup needed.
 
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams of the media pipeline, protocol stack, stall recovery, and a comparison with test2 (facebook-encoder).
+
 ## Stack
 
 - SolidJS 1.9 + @solidjs/router
-- @moq/lite, @moq/publish, @moq/watch, @moq/signals
-- RSBuild with SWC loader for @moq/* packages
-- Tailwind 4 + DaisyUI 5
+- [moqtail](https://github.com/moqtail/moqtail) v0.9.0 — MOQT draft-14 client (WebTransport)
+- WebCodecs (H.264 + Opus) with Web Worker video decode
+- RSBuild + Tailwind 4
