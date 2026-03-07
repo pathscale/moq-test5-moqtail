@@ -1,5 +1,7 @@
 # MoQ Test Harness
 
+> **See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed documentation on the media pipeline, protocol stack, stall recovery, and a comparison with test2 (facebook-encoder).**
+
 Standalone test app for debugging MoQ (Media over QUIC) audio/video streaming. Connects to the public MoQ CDN relay — no auth required.
 
 ## Run
@@ -51,10 +53,6 @@ nix develop -c just relay
 ## CDN
 
 Set relay URL to any public CDN node (for example `https://moq-relay.nofilter.io/`) — no local setup needed.
-
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed diagrams of the media pipeline, protocol stack, stall recovery, and a comparison with test2 (facebook-encoder).
 
 ## Stack
 
